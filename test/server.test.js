@@ -497,8 +497,12 @@ test("artifact SDK uses design-token aliases for annotation highlight and shadow
   assert.match(js, /el\.style\.outline\s*=\s*["']var\(--lavish-annotate-outline,2px solid #f4c95d\)["']/);
   assert.match(js, /el\.style\.outlineOffset\s*=\s*["']var\(--lavish-annotate-offset,2px\)["']/);
   assert.match(js, /--fg-faint:var\(--steel-300\)/);
-  assert.match(js, /textarea::placeholder\{color:var\(--fg-faint\)\}/);
+  assert.match(js, /--fg-label:var\(--steel-400\)/);
+  // The card's placeholder matches the chrome composer's placeholder token, and both
+  // resolve through an alias so neither can drift onto a raw hex.
+  assert.match(js, /textarea::placeholder\{color:var\(--fg-label\)\}/);
   assert.doesNotMatch(js, /placeholder\{color:#aeb6c6\}/);
+  assert.doesNotMatch(js, /placeholder\{color:#8c96aa\}/);
 });
 
 test("chrome uses the annotation outline as the keyboard focus outline", async () => {
