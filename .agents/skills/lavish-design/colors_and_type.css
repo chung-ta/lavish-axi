@@ -7,15 +7,15 @@
 
 :root {
   /* --- Ink (surfaces) ---------------------------------------- */
-  --ink-900: #0f1115;   /* artifact-frame surround, composer input */
-  --ink-800: #11141a;   /* side panels, annotation card */
-  --ink-700: #171a21;   /* top bar */
-  --ink-600: #1c212b;   /* queued-prompt pill, tooltip body */
+  --ink-900: #191d25;   /* artifact-frame surround, composer input */
+  --ink-800: #1e232c;   /* side panels, annotation card */
+  --ink-700: #252b36;   /* top bar */
+  --ink-600: #2e3542;   /* queued-prompt pill, tooltip body */
 
   /* --- Steel (borders & muted type) -------------------------- */
-  --steel-700: #2a2f3a; /* subtle border */
-  --steel-600: #303745; /* default border */
-  --steel-500: #3c4557; /* strong border */
+  --steel-700: #363d4b; /* subtle border */
+  --steel-600: #414a5c; /* default border */
+  --steel-500: #515c72; /* strong border */
   --steel-400: #8c96aa; /* labelmuted */
   --steel-300: #aeb6c6; /* helper text */
   --steel-200: #b9c0cf; /* file path, secondary */
@@ -68,9 +68,10 @@
 
   /* --- Type scale (px, line-height) ------------------------- */
   /* line-heights below: @kind font */
+  --text-2xs:  11px;  --lh-2xs:  1.3;  /* @kind font */  /* uppercase eyebrow tier */
   --text-xs:   12px;  --lh-xs:   1.35; /* @kind font */
-  --text-sm:   13px;  --lh-sm:   1.4;  /* @kind font */
-  --text-base: 14px;  --lh-base: 1.45; /* @kind font */  /* product chrome default */
+  --text-sm:   14px;  --lh-sm:   1.4;  /* @kind font */
+  --text-base: 15px;  --lh-base: 1.45; /* @kind font */  /* product chrome default */
   --text-md:   16px;  --lh-md:   1.5;  /* @kind font */
   --text-lg:   18px;  --lh-lg:   1.45; /* @kind font */
   --text-xl:   22px;  --lh-xl:   1.3;  /* @kind font */

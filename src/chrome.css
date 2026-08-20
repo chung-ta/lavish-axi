@@ -1,11 +1,11 @@
 :root {
-  --ink-900: #0f1115;
-  --ink-800: #11141a;
-  --ink-700: #171a21;
-  --ink-600: #1c212b;
-  --steel-700: #2a2f3a;
-  --steel-600: #303745;
-  --steel-500: #3c4557;
+  --ink-900: #191d25;
+  --ink-800: #1e232c;
+  --ink-700: #252b36;
+  --ink-600: #2e3542;
+  --steel-700: #363d4b;
+  --steel-600: #414a5c;
+  --steel-500: #515c72;
   --steel-400: #8c96aa;
   --steel-300: #aeb6c6;
   --steel-200: #b9c0cf;
@@ -41,11 +41,13 @@
   --font-serif: "EB Garamond", "Iowan Old Style", Georgia, serif;
   --font-sans: Geist, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --text-2xs: 11px;
+  --lh-2xs: 1.3;
   --text-xs: 12px;
   --lh-xs: 1.35;
-  --text-sm: 13px;
+  --text-sm: 14px;
   --lh-sm: 1.4;
-  --text-base: 14px;
+  --text-base: 15px;
   --lh-base: 1.45;
   --text-md: 16px;
   --lh-md: 1.5;
@@ -232,7 +234,8 @@ body.lavish {
 }
 .brand-support {
   font-family: var(--font-sans);
-  font-size: 10px;
+  font-size: var(--text-2xs);
+  line-height: 1;
   font-weight: 600;
   letter-spacing: 0.18em;
   text-transform: uppercase;
@@ -358,7 +361,7 @@ body.lavish {
   border-radius: var(--radius-pill);
   background: var(--accent);
   color: var(--accent-ink);
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: var(--w-bold);
   line-height: 1;
   font-variant-numeric: tabular-nums;
@@ -501,7 +504,7 @@ body.lavish {
   border: 1px solid var(--border-subtle);
   background: var(--ink-800);
   color: var(--fg-faint);
-  font-size: 10px;
+  font-size: var(--text-xs);
   line-height: 1.4;
   white-space: nowrap;
 }
@@ -523,7 +526,7 @@ body.lavish {
   display: block;
   margin-top: var(--space-2);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-xs);
   line-height: 1.45;
   color: var(--fg-label);
   overflow-wrap: anywhere;
@@ -544,7 +547,7 @@ body.lavish {
   background: transparent;
   color: var(--fg-faint);
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--text-xs);
   cursor: pointer;
   transition:
     background var(--dur-fast) var(--ease),
@@ -572,7 +575,7 @@ body.lavish {
 }
 .warnings-note {
   margin: 0;
-  font-size: 11px;
+  font-size: var(--text-xs);
   line-height: 1.45;
   color: var(--fg-label);
 }
@@ -632,7 +635,7 @@ body.lavish {
   padding: var(--space-4) var(--space-5) var(--space-5);
 }
 .menu-label {
-  font-size: 9px;
+  font-size: var(--text-2xs);
   font-weight: var(--w-bold);
   letter-spacing: var(--track-label);
   text-transform: uppercase;
@@ -652,7 +655,7 @@ body.lavish {
   border-radius: var(--radius-sm);
   cursor: pointer;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--fg-muted);
   transition:
     background var(--dur-fast) var(--ease),
@@ -687,7 +690,7 @@ body.lavish {
 }
 .copy-hint {
   font-family: var(--font-sans);
-  font-size: 10px;
+  font-size: var(--text-xs);
   font-weight: var(--w-semi);
   color: var(--fg-faint);
   flex-shrink: 0;
@@ -1029,7 +1032,7 @@ body.lavish {
    kicker, chat role, this panel heading - so one treatment reads as "this names a
    region" everywhere it appears. */
 .panel h2 {
-  font-size: 11px;
+  font-size: var(--text-2xs);
   line-height: 1.3;
   margin: var(--space-8) var(--space-8) var(--space-6);
   font-weight: var(--w-bold);
@@ -1105,7 +1108,7 @@ body.lavish {
   display: block;
   color: var(--fg-label);
   margin-bottom: var(--space-2);
-  font-size: 10px;
+  font-size: var(--text-2xs);
   font-weight: var(--w-bold);
   letter-spacing: var(--track-label);
   text-transform: uppercase;
@@ -1136,7 +1139,7 @@ body.lavish {
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
   color: var(--fg-muted);
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: var(--w-medium);
   line-height: 1.4;
   padding: var(--space-4) var(--space-5);
@@ -1194,7 +1197,7 @@ body.lavish {
   background: var(--bg-elevated);
   color: var(--fg-muted);
   padding: var(--space-3) var(--space-3) var(--space-3) var(--space-6);
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-weight: var(--w-bold);
   transition:
     border-color var(--dur-fast) var(--ease),
@@ -1237,7 +1240,7 @@ body.lavish {
   background: var(--border);
   border: 1px solid var(--border-strong);
   color: var(--fg-muted);
-  font-size: 10px;
+  font-size: var(--text-xs);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   line-height: 1;
@@ -1276,14 +1279,14 @@ body.lavish {
   background: var(--bg-bar);
   color: var(--fg-muted);
   padding: var(--space-5);
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-weight: var(--w-medium);
   box-shadow: var(--shadow-tooltip), var(--edge-highlight);
   animation: lavish-rise var(--dur-fast) var(--ease) both;
 }
 .tooltip-label {
   color: var(--fg-label);
-  font-size: 10px;
+  font-size: var(--text-2xs);
   font-weight: var(--w-bold);
   letter-spacing: var(--track-label);
   text-transform: uppercase;
@@ -1339,7 +1342,7 @@ body.lavish {
 }
 .send-hint {
   color: var(--fg-faint);
-  font-size: 11px;
+  font-size: var(--text-xs);
   line-height: 1.35;
 }
 .send-hint[hidden] {
@@ -1387,7 +1390,7 @@ body.lavish {
   margin: 0;
   color: var(--fg-faint);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
@@ -1519,7 +1522,7 @@ body.layout-gate-active iframe#artifact {
   padding: 32px;
   color: var(--fg);
   background: var(--bg-panel);
-  font-size: 14px;
+  font-size: var(--text-base);
   line-height: 1.5;
 }
 .whiteboard-error[hidden] {

@@ -445,7 +445,7 @@ test("annotation card title renders selected tag as an html element name", () =>
 test("annotation card shadow styles use Lavish design-system variables", () => {
   const js = createSdkJs("abc");
 
-  assert.match(js, /--ink-900:#0f1115/);
+  assert.match(js, /--ink-900:#191d25/);
   assert.match(js, /--accent:#f4c95d/);
   assert.match(js, /--font-sans:/);
   assert.match(js, /font-family:var\(--font-sans\)/);
@@ -474,7 +474,7 @@ test("annotate switch shows a brass track and ink knob when enabled", async () =
 test("chrome declares the Lavish design-system tokens", async () => {
   const css = await chromeCssSource();
 
-  assert.match(css, /--ink-900:#0f1115/);
+  assert.match(css, /--ink-900:#191d25/);
   assert.match(css, /--cream-100:#f7f3ea/);
   assert.match(css, /--brass-500:#f4c95d/);
   assert.match(css, /--font-serif:/);
@@ -2676,7 +2676,7 @@ test("/chrome.css serves the extracted chrome stylesheet", async () => {
 
     assert.equal(res.status, 200);
     assert.match(res.headers.get("content-type") || "", /text\/css/);
-    assert.match(normalizeCssForAssertions(body), /--ink-900:#0f1115/);
+    assert.match(normalizeCssForAssertions(body), /--ink-900:#191d25/);
     assert.match(
       normalizeCssForAssertions(body),
       /\.layout\{[^}]*grid-template-columns:minmax\(0,1fr\) ?var\(--panel-w\)/,
