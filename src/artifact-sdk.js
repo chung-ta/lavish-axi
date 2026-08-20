@@ -1,5 +1,6 @@
-/* global CSS, Element, MutationObserver, ResizeObserver, document, getComputedStyle, parent, window */
+/* global CSS, Element, IntersectionObserver, MutationObserver, ResizeObserver, document, getComputedStyle, parent, window */
 
+import * as outlineHelpers from "./artifact-outline.js";
 import * as mermaidHelpers from "./mermaid-node.js";
 
 export const LAVISH_INTERNAL_QUEUE_KEY = "_lavishQueueKey";
@@ -399,7 +400,13 @@ export function createArtifactSdk(
   artifactLoadToken = "",
   sessionKey = "",
   options = {},
+  // The outline helpers reach the browser as bare same-scope consts emitted by
+  // `createSdkJs` (like `deriveQueueKey`), not as an object. Taking them as a
+  // parameter defaulted to the module namespace is what lets `tsc --noEmit` resolve
+  // them from source while the served bundle passes its own serialized copies.
+  outline = outlineHelpers,
 ) {
+  const { activeOutlineIndex, collectOutlineEntries, collectOutlineQuestions } = outline;
   const { isMermaidSvg, mermaidNodeFrom, mermaidNodeElement } = mermaid;
   function postArtifactMessage(type, payload = {}) {
     parent.postMessage({ type, ...payload, artifact_load_token: String(artifactLoadToken || "") }, "*");
@@ -2095,6 +2102,154 @@ export function createArtifactSdk(
     if (el instanceof Element && el.closest("[data-lavish-question]")) scheduleReviewStateReport();
   });
 
+  // ---------------------------------------------------------------------------
+  // Section outline. The chrome renders the sticky section bar but cannot read this
+  // document - the iframe is sandboxed without same-origin - so the SDK is the only
+  // thing that can see the heading structure, and it reports it up the same way the
+  // layout audit reports findings. Nothing is injected into the artifact: headings
+  // keep whatever markup they already had, and the jump uses the SDK's own selector
+  // builder, so an artifact opened directly still renders byte-identically.
+  // ---------------------------------------------------------------------------
+  let outlineScheduled = false;
+  let lastOutlineSignature = "";
+  let outlineEntries = [];
+  let outlinePassed = new Set();
+  let outlineIntersection = null;
+  let outlineTracked = [];
+  let outlineOffsets = [];
+  let lastActiveOutlineIndex = -1;
+  // The reading line: a heading is "current" once it reaches just under the chrome.
+  const OUTLINE_READING_LINE_PX = 4;
+
+  function publishOutline() {
+    const entries = collectOutlineEntries(document, selector);
+    const questions = collectOutlineQuestions(document);
+    const doc = document.documentElement;
+    const viewportHeight = window.innerHeight || doc?.clientHeight || 0;
+    const scrollHeight = doc?.scrollHeight || 0;
+    const scrollRatio = viewportHeight > 0 ? scrollHeight / viewportHeight : 0;
+    const signature = JSON.stringify({ entries, questions, show: scrollRatio });
+    if (signature === lastOutlineSignature) return;
+    lastOutlineSignature = signature;
+    outlineEntries = entries;
+    observeOutlineHeadings();
+    postArtifactMessage("lavish:outline", { entries, questions, scroll_ratio: scrollRatio });
+  }
+
+  // Leading-edge throttle, not a trailing debounce: a debounce that resets on every
+  // mutation never fires while a streaming or animated artifact keeps mutating, and
+  // the bar would never appear. Same shape as scheduleMermaidEnhance.
+  function scheduleOutline() {
+    if (outlineScheduled) return;
+    outlineScheduled = true;
+    window.setTimeout(() => {
+      outlineScheduled = false;
+      try {
+        publishOutline();
+      } catch {
+        // An outline is a convenience, never a gate on the review. A document that
+        // defeats the scan simply gets no section bar.
+      }
+    }, 120);
+  }
+
+  // Scroll-spy via IntersectionObserver rather than a scroll handler recomputing
+  // offsets: the observer reports only the headings that actually cross the top edge,
+  // so scrolling costs nothing per frame. The root margin pins the trigger line just
+  // below the chrome, so a section becomes current as its heading reaches the top.
+  function observeOutlineHeadings() {
+    outlineIntersection?.disconnect();
+    outlinePassed = new Set();
+    lastActiveOutlineIndex = -1;
+    if (typeof IntersectionObserver === "undefined" || !outlineEntries.length) return;
+    // The observer is the trigger, not the source of truth. A heading below the
+    // trigger band never fires a record, so deciding "passed" only from the records
+    // that fired would strand the current section on the last one that happened to
+    // cross - which is exactly what leaves a long document stuck mid-page. Instead
+    // every callback re-reads the tracked headings' own geometry, which is cheap
+    // (they are already laid out) and correct at every scroll position, including
+    // the very bottom of the document.
+    outlineTracked = outlineEntries.map((entry) => safeQuerySelector(entry.selector));
+    outlineIntersection = new IntersectionObserver(measureOutlineOffsets, {
+      rootMargin: "0px 0px -85% 0px",
+      threshold: 0,
+    });
+    for (const el of outlineTracked) {
+      if (el) outlineIntersection.observe(el);
+    }
+    measureOutlineOffsets();
+  }
+
+  // Measure each tracked heading's document offset once. Doing this per scroll frame
+  // would force a synchronous layout per heading (up to the 300 cap), which is exactly
+  // the thrash an IntersectionObserver exists to avoid - so measurement happens only
+  // when geometry can have changed, and the scroll tick just compares numbers.
+  function measureOutlineOffsets() {
+    const scrollY = window.scrollY;
+    outlineOffsets = outlineTracked.map((el) =>
+      el && el.isConnected ? el.getBoundingClientRect().top + scrollY : null,
+    );
+    recomputePassedOutlineSections();
+  }
+
+  // A heading counts as passed once its top edge reaches the reading line just below
+  // the chrome. Pure arithmetic over the cached offsets, so it is safe to run on every
+  // scroll tick and stays correct for headings the observer never reported.
+  function recomputePassedOutlineSections() {
+    const line = window.scrollY + OUTLINE_READING_LINE_PX;
+    outlinePassed = new Set();
+    outlineOffsets.forEach((top, index) => {
+      if (top !== null && top <= line) outlinePassed.add(index);
+    });
+    reportActiveOutlineSection();
+  }
+
+  function reportActiveOutlineSection() {
+    const index = activeOutlineIndex(outlineEntries, [...outlinePassed]);
+    if (index === lastActiveOutlineIndex) return;
+    lastActiveOutlineIndex = index;
+    postArtifactMessage("lavish:outlineActive", { index });
+  }
+
+  function startOutline() {
+    scheduleOutline();
+    window.addEventListener("load", scheduleOutline, { once: true });
+    window.addEventListener("resize", scheduleOutline, { passive: true });
+    window.addEventListener("resize", measureOutlineOffsets, { passive: true });
+    // Artifacts render asynchronously - a Mermaid pass or a late fetch can add whole
+    // sections after load - so re-scan on DOM change, throttled the same way the
+    // Mermaid enhancement is.
+    if (typeof MutationObserver !== "undefined" && document.documentElement) {
+      new MutationObserver(() => scheduleOutline()).observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+      });
+    }
+  }
+
+  // A TOC jump lands the heading at the top of the frame, unlike the warning inbox's
+  // reveal which centers the offending element - the reader is starting to read here,
+  // not inspecting a defect.
+  function scrollToOutlineSection(sectionSelector) {
+    const target = safeQuerySelector(sectionSelector);
+    if (!(target instanceof Element)) return;
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+    target.scrollIntoView({ block: "start", behavior: reduceMotion ? "auto" : "smooth" });
+  }
+
+  // Bring an unanswered decision into view. Matched on the declared question key
+  // rather than a selector, so it still resolves after a re-render moves the block.
+  function scrollToOutlineQuestion(question) {
+    const key = String(question || "");
+    if (!key) return;
+    for (const scope of document.querySelectorAll("[data-lavish-question]")) {
+      if (String(scope.getAttribute("data-lavish-question") || "").trim() !== key) continue;
+      const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+      scope.scrollIntoView({ block: "center", behavior: reduceMotion ? "auto" : "smooth" });
+      return;
+    }
+  }
+
   function ensureShadow() {
     if (shadow) return shadow;
 
@@ -2342,6 +2497,8 @@ export function createArtifactSdk(
     }
     if (msg.type === "lavish:restoreReviewState") restoreReviewState(msg.state);
     if (msg.type === "lavish:revealElement") revealElement(msg.selector);
+    if (msg.type === "lavish:scrollToSection") scrollToOutlineSection(msg.selector);
+    if (msg.type === "lavish:scrollToQuestion") scrollToOutlineQuestion(msg.question);
   });
 
   // Bring a warning's element into view and flash it. The marker is Lavish UI, so it is excluded
@@ -2387,6 +2544,10 @@ export function createArtifactSdk(
       scrollFrame = window.requestAnimationFrame(() => {
         scrollFrame = 0;
         postArtifactMessage("lavish:scroll", { x: window.scrollX, y: window.scrollY });
+        // Reuse the existing rAF-coalesced scroll tick for the section readout: the
+        // observer alone only speaks when a heading crosses the reading line, which
+        // never happens for headings past the end of a long document.
+        recomputePassedOutlineSections();
       });
     },
     { passive: true },
@@ -2466,8 +2627,10 @@ export function createArtifactSdk(
   setAnnotationMode(annotationMode);
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", startLayoutAudit, { once: true });
+    document.addEventListener("DOMContentLoaded", startOutline, { once: true });
   } else {
     startLayoutAudit();
+    startOutline();
   }
 
   // Mermaid renders asynchronously (and can re-render on theme/resize), so we

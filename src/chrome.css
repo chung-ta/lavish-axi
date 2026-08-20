@@ -98,6 +98,13 @@
   --shadow-tooltip: 0 16px 44px rgba(0, 0, 0, 0.35);
   --shadow-floating: 0 20px 70px rgba(0, 0, 0, 0.35);
   --bar-h: 56px;
+  /* The section bar is a single thin row. It costs vertical space once and nothing
+     horizontally - a left rail would squeeze the content column from both sides,
+     because the conversation panel already owns a fixed --panel-w on the right.
+     --chrome-head-h is what everything below the header measures against, so the
+     row can appear or disappear without a second place needing to agree. */
+  --toc-h: 0px;
+  --chrome-head-h: calc(var(--bar-h) + var(--toc-h));
   --panel-w: 360px;
   --ease: cubic-bezier(0.2, 0.6, 0.2, 1);
   --dur-fast: 120ms;
@@ -1007,8 +1014,192 @@ body.lavish {
   border-color: var(--border-strong);
   background: var(--surface-hover);
 }
+/* The section bar. One thin row under the header that names where the reader is,
+   lists the sections, and - when the artifact declares decisions - reports how many
+   have been answered. It is revealed by the chrome only when it earns the space, so
+   the default --toc-h is 0 and `body.has-toc` is what pays for the row. */
+.toc-bar {
+  height: var(--toc-h);
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  padding: 0 var(--space-8);
+  background: var(--bg-bar);
+  border-bottom: var(--hairline-subtle);
+  box-sizing: border-box;
+  position: relative;
+  z-index: 45;
+}
+.toc-bar[hidden] {
+  display: none;
+}
+/* Scoped to :root, not body: the ended and layout-gate overlays are fixed-position
+   children of <body> whose `inset` resolves --chrome-head-h against the root, so a
+   body-scoped value would leave them starting 34px too high and overlapping the row. */
+:root:has(body.has-toc) {
+  --toc-h: 34px;
+}
+/* The section name takes the row's free width so it truncates only when the title is
+   genuinely longer than the bar, not merely because a spacer claimed the space. */
+.toc-nav {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+}
+.toc-current {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: 100%;
+  min-width: 0;
+  /* Only as wide as its label - the button is the section name, not the whole row. */
+  flex: 0 1 auto;
+  padding: var(--space-2) var(--space-4);
+  margin-left: calc(var(--space-4) * -1);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--fg-muted);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+.toc-current:hover:not(:disabled),
+.toc-current[aria-expanded="true"] {
+  color: var(--fg);
+  background: var(--surface-hover);
+}
+.toc-current:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.toc-current-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.toc-caret {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--fg-label);
+  transition: transform var(--dur-fast) var(--ease);
+}
+.toc-current[aria-expanded="true"] .toc-caret {
+  transform: rotate(180deg);
+}
+.toc-menu {
+  top: calc(100% + 6px);
+  left: calc(var(--space-4) * -1);
+  min-width: 260px;
+  max-width: min(420px, calc(100vw - var(--panel-w) - var(--space-16)));
+  max-height: min(60vh, 420px);
+  overflow-y: auto;
+  padding: var(--space-3);
+}
+.toc-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: var(--space-3) var(--space-5);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--fg-dim);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition:
+    color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+.toc-item:hover,
+.toc-item:focus-visible {
+  color: var(--fg);
+  background: var(--surface-hover);
+}
+/* Indent tiers come from the levels the document actually uses, not the raw tag
+   depth - real artifacts skip and reorder heading levels. */
+.toc-item[data-depth="1"] {
+  padding-left: var(--space-10);
+}
+.toc-item[data-depth="2"] {
+  padding-left: var(--space-16);
+}
+.toc-item[data-depth="3"] {
+  padding-left: var(--space-20);
+}
+.toc-item[aria-current="true"] {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+/* Decision progress. Brass marks an answered decision because it is the accent for
+   "attention resolved here"; an open decision stays a hollow steel ring so the two
+   never read as the same state at a glance. */
+.toc-decisions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-shrink: 0;
+  padding: var(--space-2) var(--space-4);
+  margin-right: calc(var(--space-4) * -1);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--fg-label);
+  font-family: inherit;
+  font-size: var(--text-2xs);
+  line-height: 1;
+  letter-spacing: var(--track-label);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+.toc-decisions[hidden] {
+  display: none;
+}
+.toc-decisions:hover:not(:disabled) {
+  color: var(--fg-muted);
+  background: var(--surface-hover);
+}
+.toc-decisions:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.toc-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.toc-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-strong);
+  box-sizing: border-box;
+}
+.toc-dot[data-answered="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.toc-count {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--track-normal);
+  font-size: var(--text-xs);
+  color: var(--fg-dim);
+}
 .layout {
-  height: calc(100vh - var(--bar-h));
+  height: calc(100vh - var(--chrome-head-h));
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--panel-w);
@@ -1356,7 +1547,7 @@ body.lavish {
 }
 .ended-overlay {
   position: fixed;
-  inset: var(--bar-h) 0 0 0;
+  inset: var(--chrome-head-h) 0 0 0;
   background: rgba(15, 17, 21, 0.86);
   display: flex;
   align-items: center;
@@ -1411,6 +1602,22 @@ body.layout-gate-active iframe#artifact {
 /* Narrow chrome: the drawer stops hanging off the button and spans the viewport instead, so the
    list never overflows horizontally on a phone-width window. */
 @media (max-width: 640px) {
+  .toc-bar {
+    gap: var(--space-5);
+    padding: 0 var(--space-6);
+  }
+  /* At phone width the dots stop being readable before the count does, so the
+     count carries the state alone rather than both crowding the row. */
+  .toc-dots {
+    display: none;
+  }
+  .toc-menu {
+    position: fixed;
+    top: calc(var(--chrome-head-h) + 6px);
+    right: 10px;
+    left: 10px;
+    max-width: none;
+  }
   .bar {
     gap: var(--space-5);
     padding: 0 var(--space-6);
@@ -1420,7 +1627,7 @@ body.layout-gate-active iframe#artifact {
   }
   .warnings-drawer {
     position: fixed;
-    top: calc(var(--bar-h) + 6px);
+    top: calc(var(--chrome-head-h) + 6px);
     right: 10px;
     left: 10px;
     width: auto;
@@ -1432,7 +1639,7 @@ body.layout-gate-active iframe#artifact {
     overflow: auto;
   }
   .layout {
-    height: calc(100vh - var(--bar-h));
+    height: calc(100vh - var(--chrome-head-h));
     grid-template-columns: 1fr;
     grid-template-rows: minmax(0, 1fr) min(42vh, 360px);
   }

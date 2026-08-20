@@ -123,6 +123,14 @@ const whiteboardOverlay = /** @type {HTMLDivElement} */ (document.getElementById
 const whiteboardFrame = /** @type {HTMLIFrameElement} */ (document.getElementById("whiteboardFrame"));
 const whiteboardCloseButton = /** @type {HTMLButtonElement} */ (document.getElementById("whiteboardClose"));
 const whiteboardError = /** @type {HTMLDivElement} */ (document.getElementById("whiteboardError"));
+const tocBar = /** @type {HTMLDivElement} */ (document.getElementById("tocBar"));
+const tocNav = /** @type {HTMLDivElement} */ (document.getElementById("tocNav"));
+const tocCurrent = /** @type {HTMLButtonElement} */ (document.getElementById("tocCurrent"));
+const tocCurrentText = /** @type {HTMLSpanElement} */ (document.getElementById("tocCurrentText"));
+const tocMenu = /** @type {HTMLDivElement} */ (document.getElementById("tocMenu"));
+const tocDecisions = /** @type {HTMLButtonElement} */ (document.getElementById("tocDecisions"));
+const tocDots = /** @type {HTMLSpanElement} */ (document.getElementById("tocDots"));
+const tocCount = /** @type {HTMLSpanElement} */ (document.getElementById("tocCount"));
 const artifactSrc = frame.dataset.artifactSrc || frame.getAttribute?.("data-artifact-src") || frame.src || "";
 
 const queued = loadQueuedPrompts();
@@ -157,6 +165,21 @@ let lastScroll = { x: 0, y: 0 };
 // answers). The sandbox means the chrome cannot read it back after a reload, so the SDK reports
 // it as it changes and the chrome replays it once the new document is up.
 let lastReviewState = null;
+// Section outline reported by the SDK. The chrome renders it but never invents it:
+// only a newer scan from the current artifact load replaces this.
+let outlineEntries = [];
+let outlineQuestions = [];
+let outlineScrollRatio = 0;
+let outlineActiveIndex = -1;
+let tocMenuOpen = false;
+// Questions the reader has actually submitted an answer for. This is chrome-owned and
+// deliberately NOT derived from the artifact's DOM: a radio the authoring agent
+// pre-checked as its recommended option is a selection, not an answer, and reading
+// `:checked` would report decisions the reader never made. A queued prompt carrying a
+// `question:<key>` queue key is an explicit submit, so that is the only thing counted.
+// It persists across a send, because a delivered prompt leaves the queue.
+const answeredQuestionsStorageKey = "lavish-axi:answered-questions:" + key;
+const answeredQuestions = new Set(loadAnsweredQuestions());
 const ARTIFACT_SILENCE_PROBE_MS = 8000;
 const ARTIFACT_LOAD_BEGIN_RETRY_DELAYS_MS = [100, 300];
 let artifactLoadToken = "";
@@ -387,6 +410,183 @@ function setMenuOpen(button, menu, open) {
 
 function closeMenus() {
   setMenuOpen(moreButton, moreMenu, false);
+  setTocMenuOpen(false);
+}
+
+// Mirrors of three helpers owned by `src/artifact-outline.js`. This file is served as
+// a raw script and cannot import modules, so the logic is duplicated rather than
+// shared - the same reason `deriveQueueKey` is serialized into the SDK. Keep these in
+// step with the module; `test/artifact-outline.test.js` owns the behavior contract.
+function questionKeyFromQueueKey(queueKey) {
+  const raw = String(queueKey || "");
+  return raw.startsWith("question:") ? raw.slice("question:".length).trim() : "";
+}
+
+function summarizeDecisionProgress(questions, answeredKeys) {
+  const total = Array.isArray(questions) ? questions.length : 0;
+  if (!total) return null;
+  const answered = new Set(answeredKeys || []);
+  const items = questions.map((question) => ({ key: question.key, answered: answered.has(question.key) }));
+  return { total, answered: items.filter((item) => item.answered).length, items };
+}
+
+function shouldShowOutlineBar({ entries, questions, scrollRatio }) {
+  const sections = Array.isArray(entries) ? entries.length : 0;
+  const decisions = Array.isArray(questions) ? questions.length : 0;
+  if (decisions > 0) return true;
+  if (sections < 2) return false;
+  return !(Number.isFinite(scrollRatio) && scrollRatio < 1.6);
+}
+
+function loadAnsweredQuestions() {
+  const stored = loadJsonState(answeredQuestionsStorageKey, []);
+  return Array.isArray(stored) ? stored.filter((entry) => typeof entry === "string") : [];
+}
+
+// Record that a queued prompt answered a declared question. Called on the queue path
+// rather than read back from the DOM, so the record survives the prompt being
+// delivered to the agent and spliced out of the queue.
+function noteAnsweredQuestion(prompt) {
+  const question = questionKeyFromQueueKey(promptQueueKey(prompt));
+  if (!question || answeredQuestions.has(question)) return;
+  answeredQuestions.add(question);
+  saveJsonState(answeredQuestionsStorageKey, [...answeredQuestions]);
+  renderToc();
+}
+
+// Drop a question's answered mark when the prompt carrying it is retracted. Only the
+// prompt still in the queue can retract it: once a batch is delivered the prompts are
+// spliced out by the send path and the answer is final.
+function forgetAnsweredQuestion(prompt) {
+  const question = questionKeyFromQueueKey(promptQueueKey(prompt));
+  if (!question || !answeredQuestions.has(question)) return;
+  answeredQuestions.delete(question);
+  saveJsonState(answeredQuestionsStorageKey, [...answeredQuestions]);
+  renderToc();
+}
+
+function setTocMenuOpen(open) {
+  const next = Boolean(open);
+  tocMenuOpen = next;
+  tocMenu.hidden = !next;
+  tocCurrent.setAttribute("aria-expanded", String(next));
+  if (next) renderTocMenu();
+}
+
+function toggleTocMenu() {
+  const open = !tocMenuOpen;
+  closeMenus();
+  setTocMenuOpen(open);
+  if (open) focusTocItem(0);
+}
+
+function tocItems() {
+  return /** @type {HTMLButtonElement[]} */ ([...tocMenu.querySelectorAll(".toc-item")]);
+}
+
+function focusTocItem(index) {
+  const items = tocItems();
+  if (!items.length) return;
+  const bounded = (index + items.length) % items.length;
+  items[bounded].focus();
+}
+
+function jumpToSection(index) {
+  const entry = outlineEntries[index];
+  if (!entry) return;
+  postToFrame({ type: "lavish:scrollToSection", selector: entry.selector });
+  setTocMenuOpen(false);
+  tocCurrent.focus();
+}
+
+// Jump to the first decision the reader has not answered yet. The counter is only
+// worth permanent space if acting on it is one click away.
+function jumpToNextOpenDecision() {
+  const open = outlineQuestions.find((question) => !answeredQuestions.has(question.key));
+  if (!open) return;
+  postToFrame({ type: "lavish:scrollToQuestion", question: open.key });
+}
+
+function renderTocMenu() {
+  tocMenu.replaceChildren();
+  outlineEntries.forEach((entry, index) => {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "toc-item";
+    item.setAttribute("role", "option");
+    item.dataset.depth = String(entry.depth ?? 0);
+    // Artifact-derived text: assigned as text, never as markup.
+    item.textContent = entry.text;
+    if (index === outlineActiveIndex) item.setAttribute("aria-current", "true");
+    item.onclick = () => jumpToSection(index);
+    tocMenu.appendChild(item);
+  });
+}
+
+function renderTocDecisions() {
+  const progress = summarizeDecisionProgress(outlineQuestions, [...answeredQuestions]);
+  // No visible questions means there is nothing honest to report - render no counter
+  // at all rather than a meaningless 0/0.
+  tocDecisions.hidden = !progress;
+  if (!progress) return;
+  tocDots.replaceChildren();
+  for (const item of progress.items) {
+    const dot = document.createElement("span");
+    dot.className = "toc-dot";
+    dot.dataset.answered = String(item.answered);
+    tocDots.appendChild(dot);
+  }
+  tocCount.textContent = progress.answered + "/" + progress.total;
+  const open = progress.total - progress.answered;
+  tocDecisions.disabled = ended || open === 0;
+  tocDecisions.title = open
+    ? open + " decision" + (open === 1 ? "" : "s") + " still open - jump to the next one"
+    : "Every tracked decision has been answered";
+  tocDecisions.setAttribute("aria-label", progress.answered + " of " + progress.total + " tracked decisions answered");
+}
+
+function renderToc() {
+  const show = shouldShowOutlineBar({
+    entries: outlineEntries,
+    questions: outlineQuestions,
+    scrollRatio: outlineScrollRatio,
+  });
+  tocBar.hidden = !show;
+  document.body.classList.toggle("has-toc", show);
+  if (!show) {
+    setTocMenuOpen(false);
+    return;
+  }
+  const active = outlineEntries[outlineActiveIndex] || outlineEntries[0];
+  tocNav.hidden = !outlineEntries.length;
+  tocCurrentText.textContent = active ? active.text : "";
+  tocCurrent.disabled = ended || !outlineEntries.length;
+  renderTocDecisions();
+  if (tocMenuOpen) renderTocMenu();
+}
+
+function setOutline(payload) {
+  outlineEntries = Array.isArray(payload.entries) ? payload.entries : [];
+  outlineQuestions = Array.isArray(payload.questions) ? payload.questions : [];
+  outlineScrollRatio = Number(payload.scroll_ratio) || 0;
+  if (outlineActiveIndex >= outlineEntries.length) outlineActiveIndex = -1;
+  pruneAnsweredQuestions();
+  renderToc();
+}
+
+// The session key is the artifact's path, so it survives the file being regenerated
+// with entirely different decisions. Answers for questions the current document no
+// longer declares are dropped, or a rewritten artifact would open already "answered".
+function pruneAnsweredQuestions() {
+  if (!outlineQuestions.length) return;
+  const declared = new Set(outlineQuestions.map((question) => question.key));
+  let changed = false;
+  for (const key of [...answeredQuestions]) {
+    if (declared.has(key)) continue;
+    answeredQuestions.delete(key);
+    changed = true;
+  }
+  if (changed) saveJsonState(answeredQuestionsStorageKey, [...answeredQuestions]);
 }
 
 function toggleMenu(button, menu) {
@@ -492,7 +692,12 @@ function scrollElementIntoView(el) {
 
 function removeQueuedPrompt(index, event) {
   if (event) event.stopPropagation();
-  queued.splice(index, 1);
+  const [removed] = queued.splice(index, 1);
+  // Removing the pill retracts the answer it carried. Delivery is not the only way a
+  // prompt leaves the queue, and the counter must never keep reporting an answer the
+  // agent will never receive - that is the exact over-reporting this feature exists
+  // to avoid. The send path splices separately, so a delivered answer still stands.
+  forgetAnsweredQuestion(removed);
   persistQueuedPrompts();
   render();
 }
@@ -517,6 +722,7 @@ function enqueuePrompt(rawPrompt) {
     queued.push(prompt);
   }
 
+  noteAnsweredQuestion(prompt);
   persistQueuedPrompts();
   render();
 }
@@ -1082,6 +1288,9 @@ function markSessionEnded() {
   annotationSwitch.disabled = true;
   moreButton.disabled = true;
   chatInput.disabled = true;
+  // The ended overlay starts below the section row, so the bar stays visible and
+  // would otherwise keep accepting jumps into a dead session.
+  renderToc();
   updateSendState();
   if (presenceBanner) presenceBanner.hidden = true;
   if (handoffBanner) handoffBanner.hidden = true;
@@ -1231,6 +1440,13 @@ async function publishShare(event) {
 
 async function replaceArtifactFrame() {
   clearTimeout(artifactSilenceTimer);
+  // The replacement document republishes its own outline. Drop the active section and
+  // close the list so the bar never names - or jumps to - a section from the document
+  // being replaced; the entries themselves stay until the new scan lands, so the bar
+  // does not flicker away and back on every save.
+  outlineActiveIndex = -1;
+  setTocMenuOpen(false);
+  renderToc();
   // The iframe is sandboxed, so reload by resetting the iframe URL from chrome.
   if (!artifactSrc) {
     startLayoutGateCycle();
@@ -1908,6 +2124,16 @@ window.addEventListener("message", (event) => {
   if (msg.type === "lavish:reviewState") {
     lastReviewState = msg.state && typeof msg.state === "object" ? msg.state : null;
   }
+  if (msg.type === "lavish:outline") {
+    setOutline(msg);
+  }
+  if (msg.type === "lavish:outlineActive") {
+    const index = Number(msg.index);
+    if (Number.isInteger(index) && index !== outlineActiveIndex) {
+      outlineActiveIndex = index;
+      renderToc();
+    }
+  }
   if (msg.type === "lavish:artifactAssetFailure") {
     reportArtifactFailures(
       [{ kind: "artifact-asset-unavailable", detail: String(msg.detail || "a local artifact asset failed to load") }],
@@ -2095,7 +2321,41 @@ handoffTakeoverButton.onclick = () => location.reload();
 document.addEventListener("mousedown", (event) => {
   const target = /** @type {Node} */ (event.target);
   if (!moreMenu.hidden && !moreWrap.contains(target)) setMenuOpen(moreButton, moreMenu, false);
+  if (tocMenuOpen && !tocNav.contains(target)) setTocMenuOpen(false);
   if (warningsDrawerOpen && !warningsWrap.contains(target)) closeWarningsDrawer();
+});
+tocCurrent.onclick = toggleTocMenu;
+tocDecisions.onclick = jumpToNextOpenDecision;
+// Arrow keys move through the section list, Home/End jump to its ends, and Enter or
+// Space on the trigger opens it - the same conventions as a native listbox, so the
+// list is usable without a pointer.
+tocNav.addEventListener("keydown", (event) => {
+  if (!tocMenuOpen) {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      toggleTocMenu();
+    }
+    return;
+  }
+  const items = tocItems();
+  const current = items.indexOf(/** @type {HTMLButtonElement} */ (document.activeElement));
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    focusTocItem(current + 1);
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
+    focusTocItem(current - 1);
+  } else if (event.key === "Home") {
+    event.preventDefault();
+    focusTocItem(0);
+  } else if (event.key === "End") {
+    event.preventDefault();
+    focusTocItem(items.length - 1);
+  }
+});
+tocNav.addEventListener("focusout", (event) => {
+  const next = /** @type {Node | null} */ (event.relatedTarget);
+  if (tocMenuOpen && (!next || !tocNav.contains(next))) setTocMenuOpen(false);
 });
 // A non-modal popover closes when focus leaves it, so keyboard users are never stranded inside a
 // panel they cannot see the end of.
@@ -2112,6 +2372,9 @@ document.addEventListener("keydown", (event) => {
       closeShareDialog();
     } else if (warningsDrawerOpen) {
       closeWarningsDrawer({ restoreFocus: true });
+    } else if (tocMenuOpen) {
+      setTocMenuOpen(false);
+      tocCurrent.focus();
     } else {
       closeMenus();
     }
@@ -2157,6 +2420,7 @@ events.addEventListener("layout-warnings", (event) => setLayoutWarnings(JSON.par
 events.addEventListener("open", () => refreshLayoutWarnings());
 
 render();
+renderToc();
 setWarningsDrawerOpen(false);
 renderWarnings();
 initialChat.forEach((item) => addChat(item.role, item.text));

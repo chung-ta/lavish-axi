@@ -4030,7 +4030,15 @@ test("ended session shows an overlay card over the dimmed chrome", async () => {
   assert.match(html, /Return to your agent to continue\./);
   assert.match(html, /class="ended-copy">\/tmp\/artifact\.html</);
   assert.doesNotMatch(html, /The agent polling loop can stop\./);
-  assert.match(css, /\.ended-overlay\{[^}]*inset:var\(--bar-h\) 0 0 0/);
+  // The overlay covers everything below the header, including the section bar, so it
+  // measures against --chrome-head-h (bar + section row) rather than the bar alone.
+  assert.match(css, /\.ended-overlay\{[^}]*inset:var\(--chrome-head-h\) 0 0 0/);
+  // --toc-h must be redefined at :root, not on body. The ended and layout-gate
+  // overlays are fixed-position children of <body>, so their inset resolves
+  // --chrome-head-h against the root; a body-scoped value leaves them starting a row
+  // too high and overlapping the section bar they are supposed to sit beneath.
+  assert.match(css, /:root:has\(body\.has-toc\)\{--toc-h:34px;?\}/);
+  assert.doesNotMatch(css, /(^|\})body\.has-toc\{--toc-h/);
   assert.match(css, /\.ended-overlay\{[^}]*background:rgba\(15,17,21,.86\)/);
   assert.match(css, /\.ended-title\{[^}]*font-family:var\(--font-serif\)/);
   assert.match(js, /endedOverlay\.hidden = false/);
