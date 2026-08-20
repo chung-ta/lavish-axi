@@ -566,8 +566,12 @@ function renderToc() {
 }
 
 function setOutline(payload) {
-  outlineEntries = Array.isArray(payload.entries) ? payload.entries : [];
-  outlineQuestions = Array.isArray(payload.questions) ? payload.questions : [];
+  // The SDK caps these, but it shares a realm with artifact JS, which can postMessage
+  // here directly -- so the chrome enforces its own bounds rather than inheriting them.
+  outlineEntries = (Array.isArray(payload.entries) ? payload.entries : [])
+    .slice(0, 300)
+    .map((entry) => ({ ...entry, text: String(entry?.text ?? "").slice(0, 160) }));
+  outlineQuestions = (Array.isArray(payload.questions) ? payload.questions : []).slice(0, 300);
   outlineScrollRatio = Number(payload.scroll_ratio) || 0;
   if (outlineActiveIndex >= outlineEntries.length) outlineActiveIndex = -1;
   pruneAnsweredQuestions();
@@ -577,8 +581,12 @@ function setOutline(payload) {
 // The session key is the artifact's path, so it survives the file being regenerated
 // with entirely different decisions. Answers for questions the current document no
 // longer declares are dropped, or a rewritten artifact would open already "answered".
+// Guarding on outlineQuestions being non-empty would invert this: setOutline assigns
+// it before calling here, so an empty list is the document declaring no decisions --
+// exactly when every stored answer is stale. A transient scan that misses the blocks
+// self-heals on the next scan; a stale answer surviving a rewrite does not.
 function pruneAnsweredQuestions() {
-  if (!outlineQuestions.length) return;
+  if (!answeredQuestions.size) return;
   const declared = new Set(outlineQuestions.map((question) => question.key));
   let changed = false;
   for (const key of [...answeredQuestions]) {

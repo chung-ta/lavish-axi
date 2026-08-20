@@ -3013,6 +3013,48 @@ test("answers for questions a new revision no longer declares are dropped", asyn
   assert.equal(chrome.element("tocCount").textContent, "0/1");
 });
 
+test("an answer does not survive a revision that declares no questions at all", async () => {
+  const chrome = await createChromeHarness();
+  chrome.sendFrameMessage(outlineMessage(chrome, { questions: [{ key: "plan" }] }));
+  chrome.sendFrameMessage({
+    type: "lavish:queuePrompt",
+    artifact_load_token: chrome.artifactLoadToken(),
+    prompt: {
+      uid: "u1",
+      prompt: "Use the Pro plan",
+      selector: "form",
+      tag: "choice",
+      _lavishQueueKey: "question:plan",
+    },
+  });
+  assert.equal(chrome.element("tocCount").textContent, "1/1");
+
+  // The decisions are removed entirely, then the author reverts and restores them.
+  // An empty scan is the document declaring none, not an absence of information -
+  // so the stale answer must not come back when the key is re-declared.
+  chrome.sendFrameMessage(outlineMessage(chrome, { questions: [] }));
+  chrome.sendFrameMessage(outlineMessage(chrome, { questions: [{ key: "plan" }] }));
+
+  assert.equal(chrome.element("tocCount").textContent, "0/1");
+});
+
+test("a hostile heading renders as inert text, never as markup", async () => {
+  const chrome = await createChromeHarness();
+  const hostile = '<img src=x onerror="alert(1)">';
+  chrome.sendFrameMessage(
+    outlineMessage(chrome, {
+      entries: [
+        { level: 1, depth: 0, text: hostile, selector: "h1" },
+        { level: 2, depth: 1, text: "Second", selector: "h2" },
+      ],
+    }),
+  );
+
+  // The chrome origin can POST prompts to the agent, so markup escaping here is a
+  // sandbox boundary, not a cosmetic concern. textContent is the whole defense.
+  assert.equal(chrome.element("tocCurrentText").textContent, hostile);
+});
+
 test("the section bar goes inert when the session ends", async () => {
   const chrome = await createChromeHarness();
   chrome.sendFrameMessage(outlineMessage(chrome, { questions: [{ key: "plan" }] }));

@@ -221,14 +221,26 @@ test("the chrome client's inlined outline helpers match this module", async () =
   // Arrange
   const { readFile } = await import("node:fs/promises");
   const source = await readFile(new URL("../src/chrome-client.js", import.meta.url), "utf8");
-  const context = {};
-  const factory = new Function(
-    "exports",
-    source.slice(source.indexOf("function questionKeyFromQueueKey"), source.indexOf("function loadAnsweredQuestions")) +
-      "exports.questionKeyFromQueueKey = questionKeyFromQueueKey;" +
-      "exports.summarizeDecisionProgress = summarizeDecisionProgress;" +
-      "exports.shouldShowOutlineBar = shouldShowOutlineBar;",
+  // indexOf returns -1 on a miss, which would silently slice garbage and surface as a
+  // confusing SyntaxError instead of "the anchors moved". Fail on the real cause.
+  const start = source.indexOf("function questionKeyFromQueueKey");
+  const end = source.indexOf("function loadAnsweredQuestions");
+  assert.ok(start >= 0 && end > start, "outline helper markers moved in chrome-client.js - update these slice anchors");
+  const window = source.slice(start, end);
+
+  const pinned = ["questionKeyFromQueueKey", "summarizeDecisionProgress", "shouldShowOutlineBar"];
+  // The SDK seam derives its declarations from the module's exports, so a new helper
+  // cannot silently go unserialized. This seam is hand-inlined, so assert the set too:
+  // a fourth copy added inside this window would otherwise pass while pinning nothing.
+  const mirrored = [...window.matchAll(/^function (\w+)\(/gm)].map((match) => match[1]);
+  assert.deepEqual(
+    mirrored.filter((name) => !pinned.includes(name)),
+    [],
+    "a hand-inlined helper in chrome-client.js has no drift case pinning it",
   );
+
+  const context = {};
+  const factory = new Function("exports", window + pinned.map((name) => `exports.${name} = ${name};`).join(""));
   factory(context);
 
   const cases = [
