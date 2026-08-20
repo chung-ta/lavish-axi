@@ -188,6 +188,11 @@ export const PLAYBOOKS = [
     ],
     structure: [
       "Make each decision surface visible: what is being chosen, what the options mean, and what happens next.",
+      "Give the reader enough context to decide without leaving the artifact: why the question is being asked, what prompted it, and what is blocked until it is answered.",
+      "State the tradeoff behind each option - the cost, risk, or thing given up - not just its label. An option list with no stated consequences asks the reader to guess.",
+      "Show the evidence the question rests on: the measurement, constraint, or code that led here. A decision backed by a number the reader can see is faster than one backed by an assertion.",
+      "Name a recommended option and say why it is recommended, so the reader can agree quickly or push back deliberately.",
+      "Say what is reversible and what is not, so the reader knows how much care the choice deserves.",
       "Keep reversible selection state local in the artifact until the user explicitly submits that question.",
       "Pair each question with a Submit or Queue answer control that sends exactly one prompt for the final answer.",
       "Show selected state separately from queued state so the user trusts what will be sent back.",
@@ -206,6 +211,8 @@ export const PLAYBOOKS = [
     pitfalls: [
       "Do not queue one prompt per radio change, checkbox toggle, dropdown change, or choice-button click when the user can still change their mind.",
       "Do not create controls whose queued prompt is unclear or too vague to execute.",
+      "Do not present bare option labels with no rationale, tradeoff, or consequence - the reader should never have to ask why they are being asked.",
+      "Do not ask the reader to arbitrate a question the artifact could answer itself by measuring, reading the code, or checking the constraint first.",
       "Do not hide the difference between selected locally and queued for the agent.",
       "Do not require interaction for content the user only needs to read.",
     ],
