@@ -445,7 +445,7 @@ test("annotation card title renders selected tag as an html element name", () =>
 test("annotation card shadow styles use Lavish design-system variables", () => {
   const js = createSdkJs("abc");
 
-  assert.match(js, /--ink-900:#0f1115/);
+  assert.match(js, /--ink-900:#191d25/);
   assert.match(js, /--accent:#f4c95d/);
   assert.match(js, /--font-sans:/);
   assert.match(js, /font-family:var\(--font-sans\)/);
@@ -474,7 +474,7 @@ test("annotate switch shows a brass track and ink knob when enabled", async () =
 test("chrome declares the Lavish design-system tokens", async () => {
   const css = await chromeCssSource();
 
-  assert.match(css, /--ink-900:#0f1115/);
+  assert.match(css, /--ink-900:#191d25/);
   assert.match(css, /--cream-100:#f7f3ea/);
   assert.match(css, /--brass-500:#f4c95d/);
   assert.match(css, /--font-serif:/);
@@ -2676,7 +2676,7 @@ test("/chrome.css serves the extracted chrome stylesheet", async () => {
 
     assert.equal(res.status, 200);
     assert.match(res.headers.get("content-type") || "", /text\/css/);
-    assert.match(normalizeCssForAssertions(body), /--ink-900:#0f1115/);
+    assert.match(normalizeCssForAssertions(body), /--ink-900:#191d25/);
     assert.match(
       normalizeCssForAssertions(body),
       /\.layout\{[^}]*grid-template-columns:minmax\(0,1fr\) ?var\(--panel-w\)/,
@@ -4030,7 +4030,15 @@ test("ended session shows an overlay card over the dimmed chrome", async () => {
   assert.match(html, /Return to your agent to continue\./);
   assert.match(html, /class="ended-copy">\/tmp\/artifact\.html</);
   assert.doesNotMatch(html, /The agent polling loop can stop\./);
-  assert.match(css, /\.ended-overlay\{[^}]*inset:var\(--bar-h\) 0 0 0/);
+  // The overlay covers everything below the header, including the section bar, so it
+  // measures against --chrome-head-h (bar + section row) rather than the bar alone.
+  assert.match(css, /\.ended-overlay\{[^}]*inset:var\(--chrome-head-h\) 0 0 0/);
+  // --toc-h must be redefined at :root, not on body. The ended and layout-gate
+  // overlays are fixed-position children of <body>, so their inset resolves
+  // --chrome-head-h against the root; a body-scoped value leaves them starting a row
+  // too high and overlapping the section bar they are supposed to sit beneath.
+  assert.match(css, /:root:has\(body\.has-toc\)\{--toc-h:34px;?\}/);
+  assert.doesNotMatch(css, /(^|\})body\.has-toc\{--toc-h/);
   assert.match(css, /\.ended-overlay\{[^}]*background:rgba\(15,17,21,.86\)/);
   assert.match(css, /\.ended-title\{[^}]*font-family:var\(--font-serif\)/);
   assert.match(js, /endedOverlay\.hidden = false/);

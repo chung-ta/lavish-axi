@@ -678,6 +678,9 @@ test("playbook detail output returns focused Lavish-native guidance", () => {
   assert.match(output.playbook.use_when, /collect user input/);
   assert.ok(output.playbook.choose.some((item) => item.includes("control")));
   assert.ok(output.playbook.structure.some((item) => item.includes("decision")));
+  assert.ok(output.playbook.structure.some((item) => item.includes("tradeoff")));
+  assert.ok(output.playbook.structure.some((item) => item.includes("recommended")));
+  assert.ok(output.playbook.pitfalls.some((item) => item.includes("arbitrate")));
   assert.ok(output.playbook.design_rules.some((item) => item.includes("queuePrompt")));
   assert.ok(output.playbook.design_rules.some((item) => item.includes("per-question form submit")));
   assert.ok(output.playbook.design_rules.some((item) => item.includes("radio change handlers")));

@@ -104,13 +104,13 @@ If new copy doesn't sit comfortably next to those lines, rewrite it.
 
 ### Colors
 
-- **Ink** — the canvas. `#0f1115` for the artifact frame surround and composer input. `#11141a` for side panels. `#171a21` for the top bar. Never pure black: the warm cream type would feel clinical against it.
+- **Ink** — the canvas. `#191d25` for the artifact frame surround and composer input. `#1e232c` for side panels. `#252b36` for the top bar. Never pure black: the warm cream type would feel clinical against it.
 - **Cream** — the type. `#f7f3ea`. A paper-warm off-white that reads at low contrast as candlelit, at high contrast as legible. All primary type sits on ink in cream.
 - **Brass** — the single accent. `#f4c95d`. Used for the primary CTA, the annotation outline (2px solid, 2px offset), selected-text range highlights (`rgba(244,201,93,.28)` with a `rgba(244,201,93,.45)` stroke), the brand mark moment, and absolutely nothing else. Its ink-on-brass pair is `#17130a` — a deep almost-black that keeps the gold from feeling like a neon button.
 - **Sage** — the _agent_ signal. `#172419` background, `#315f3a` border, `#8fe39e` for the working spinner. Used only on agent chat bubbles and the working indicator.
 - **Amber** — the _user_ signal. `#25230f` background, `#5d4d1b` border. Used only on user chat bubbles and queued-prompt pills.
 - **Rust** — the danger signal. `#f06464`. Reserved for _End session_, _Send & end session_, and destructive confirmations.
-- **Steels** — the grays. `#2a2f3a` / `#303745` / `#3c4557` for borders, ranked subtle → strong. `#b9c0cf` / `#d8deea` / `#aeb6c6` / `#8c96aa` for muted type, ranked bright → dim.
+- **Steels** — the grays. `#363d4b` / `#414a5c` / `#515c72` for borders, ranked subtle → strong. `#b9c0cf` / `#d8deea` / `#aeb6c6` / `#8c96aa` for muted type, ranked bright → dim.
 
 No gradients. No glassmorphism. No bluish-purple anything.
 
@@ -175,11 +175,11 @@ Never on buttons. Never on cards that sit _inside_ a panel. The aesthetic is _pa
 
 ### Transparency & blur
 
-Almost never. The annotation card is solid `#11141a` over the artifact — not a translucent veil. The only acceptable blur is the artifact iframe being momentarily hidden during a session-ended flash.
+Almost never. The annotation card is solid `#1e232c` over the artifact — not a translucent veil. The only acceptable blur is the artifact iframe being momentarily hidden during a session-ended flash.
 
 ### Cards
 
-A "card" in Lavish is a slab of `#11141a` or `#1c212b` with a 1px border (`#303745`) and a generous radius (`12–14px`). **No shadow.** No left-color-accent stripe. The content is the card; the chrome is the frame.
+A "card" in Lavish is a slab of `#1e232c` or `#2e3542` with a 1px border (`#414a5c`) and a generous radius (`12–14px`). **No shadow.** No left-color-accent stripe. The content is the card; the chrome is the frame.
 
 ### Layout rules
 

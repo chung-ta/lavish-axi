@@ -1,5 +1,6 @@
-/* global CSS, Element, MutationObserver, ResizeObserver, document, getComputedStyle, parent, window */
+/* global CSS, Element, IntersectionObserver, MutationObserver, ResizeObserver, document, getComputedStyle, parent, window */
 
+import * as outlineHelpers from "./artifact-outline.js";
 import * as mermaidHelpers from "./mermaid-node.js";
 
 export const LAVISH_INTERNAL_QUEUE_KEY = "_lavishQueueKey";
@@ -399,7 +400,13 @@ export function createArtifactSdk(
   artifactLoadToken = "",
   sessionKey = "",
   options = {},
+  // The outline helpers reach the browser as bare same-scope consts emitted by
+  // `createSdkJs` (like `deriveQueueKey`), not as an object. Taking them as a
+  // parameter defaulted to the module namespace is what lets `tsc --noEmit` resolve
+  // them from source while the served bundle passes its own serialized copies.
+  outline = outlineHelpers,
 ) {
+  const { activeOutlineIndex, collectOutlineEntries, collectOutlineQuestions } = outline;
   const { isMermaidSvg, mermaidNodeFrom, mermaidNodeElement } = mermaid;
   function postArtifactMessage(type, payload = {}) {
     parent.postMessage({ type, ...payload, artifact_load_token: String(artifactLoadToken || "") }, "*");
@@ -2095,6 +2102,154 @@ export function createArtifactSdk(
     if (el instanceof Element && el.closest("[data-lavish-question]")) scheduleReviewStateReport();
   });
 
+  // ---------------------------------------------------------------------------
+  // Section outline. The chrome renders the sticky section bar but cannot read this
+  // document - the iframe is sandboxed without same-origin - so the SDK is the only
+  // thing that can see the heading structure, and it reports it up the same way the
+  // layout audit reports findings. Nothing is injected into the artifact: headings
+  // keep whatever markup they already had, and the jump uses the SDK's own selector
+  // builder, so an artifact opened directly still renders byte-identically.
+  // ---------------------------------------------------------------------------
+  let outlineScheduled = false;
+  let lastOutlineSignature = "";
+  let outlineEntries = [];
+  let outlinePassed = new Set();
+  let outlineIntersection = null;
+  let outlineTracked = [];
+  let outlineOffsets = [];
+  let lastActiveOutlineIndex = -1;
+  // The reading line: a heading is "current" once it reaches just under the chrome.
+  const OUTLINE_READING_LINE_PX = 4;
+
+  function publishOutline() {
+    const entries = collectOutlineEntries(document, selector);
+    const questions = collectOutlineQuestions(document);
+    const doc = document.documentElement;
+    const viewportHeight = window.innerHeight || doc?.clientHeight || 0;
+    const scrollHeight = doc?.scrollHeight || 0;
+    const scrollRatio = viewportHeight > 0 ? scrollHeight / viewportHeight : 0;
+    const signature = JSON.stringify({ entries, questions, show: scrollRatio });
+    if (signature === lastOutlineSignature) return;
+    lastOutlineSignature = signature;
+    outlineEntries = entries;
+    observeOutlineHeadings();
+    postArtifactMessage("lavish:outline", { entries, questions, scroll_ratio: scrollRatio });
+  }
+
+  // Leading-edge throttle, not a trailing debounce: a debounce that resets on every
+  // mutation never fires while a streaming or animated artifact keeps mutating, and
+  // the bar would never appear. Same shape as scheduleMermaidEnhance.
+  function scheduleOutline() {
+    if (outlineScheduled) return;
+    outlineScheduled = true;
+    window.setTimeout(() => {
+      outlineScheduled = false;
+      try {
+        publishOutline();
+      } catch {
+        // An outline is a convenience, never a gate on the review. A document that
+        // defeats the scan simply gets no section bar.
+      }
+    }, 120);
+  }
+
+  // Scroll-spy via IntersectionObserver rather than a scroll handler recomputing
+  // offsets: the observer reports only the headings that actually cross the top edge,
+  // so scrolling costs nothing per frame. The root margin pins the trigger line just
+  // below the chrome, so a section becomes current as its heading reaches the top.
+  function observeOutlineHeadings() {
+    outlineIntersection?.disconnect();
+    outlinePassed = new Set();
+    lastActiveOutlineIndex = -1;
+    if (typeof IntersectionObserver === "undefined" || !outlineEntries.length) return;
+    // The observer is the trigger, not the source of truth. A heading below the
+    // trigger band never fires a record, so deciding "passed" only from the records
+    // that fired would strand the current section on the last one that happened to
+    // cross - which is exactly what leaves a long document stuck mid-page. Instead
+    // every callback re-reads the tracked headings' own geometry, which is cheap
+    // (they are already laid out) and correct at every scroll position, including
+    // the very bottom of the document.
+    outlineTracked = outlineEntries.map((entry) => safeQuerySelector(entry.selector));
+    outlineIntersection = new IntersectionObserver(measureOutlineOffsets, {
+      rootMargin: "0px 0px -85% 0px",
+      threshold: 0,
+    });
+    for (const el of outlineTracked) {
+      if (el) outlineIntersection.observe(el);
+    }
+    measureOutlineOffsets();
+  }
+
+  // Measure each tracked heading's document offset once. Doing this per scroll frame
+  // would force a synchronous layout per heading (up to the 300 cap), which is exactly
+  // the thrash an IntersectionObserver exists to avoid - so measurement happens only
+  // when geometry can have changed, and the scroll tick just compares numbers.
+  function measureOutlineOffsets() {
+    const scrollY = window.scrollY;
+    outlineOffsets = outlineTracked.map((el) =>
+      el && el.isConnected ? el.getBoundingClientRect().top + scrollY : null,
+    );
+    recomputePassedOutlineSections();
+  }
+
+  // A heading counts as passed once its top edge reaches the reading line just below
+  // the chrome. Pure arithmetic over the cached offsets, so it is safe to run on every
+  // scroll tick and stays correct for headings the observer never reported.
+  function recomputePassedOutlineSections() {
+    const line = window.scrollY + OUTLINE_READING_LINE_PX;
+    outlinePassed = new Set();
+    outlineOffsets.forEach((top, index) => {
+      if (top !== null && top <= line) outlinePassed.add(index);
+    });
+    reportActiveOutlineSection();
+  }
+
+  function reportActiveOutlineSection() {
+    const index = activeOutlineIndex(outlineEntries, [...outlinePassed]);
+    if (index === lastActiveOutlineIndex) return;
+    lastActiveOutlineIndex = index;
+    postArtifactMessage("lavish:outlineActive", { index });
+  }
+
+  function startOutline() {
+    scheduleOutline();
+    window.addEventListener("load", scheduleOutline, { once: true });
+    window.addEventListener("resize", scheduleOutline, { passive: true });
+    window.addEventListener("resize", measureOutlineOffsets, { passive: true });
+    // Artifacts render asynchronously - a Mermaid pass or a late fetch can add whole
+    // sections after load - so re-scan on DOM change, throttled the same way the
+    // Mermaid enhancement is.
+    if (typeof MutationObserver !== "undefined" && document.documentElement) {
+      new MutationObserver(() => scheduleOutline()).observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+      });
+    }
+  }
+
+  // A TOC jump lands the heading at the top of the frame, unlike the warning inbox's
+  // reveal which centers the offending element - the reader is starting to read here,
+  // not inspecting a defect.
+  function scrollToOutlineSection(sectionSelector) {
+    const target = safeQuerySelector(sectionSelector);
+    if (!(target instanceof Element)) return;
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+    target.scrollIntoView({ block: "start", behavior: reduceMotion ? "auto" : "smooth" });
+  }
+
+  // Bring an unanswered decision into view. Matched on the declared question key
+  // rather than a selector, so it still resolves after a re-render moves the block.
+  function scrollToOutlineQuestion(question) {
+    const key = String(question || "");
+    if (!key) return;
+    for (const scope of document.querySelectorAll("[data-lavish-question]")) {
+      if (String(scope.getAttribute("data-lavish-question") || "").trim() !== key) continue;
+      const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+      scope.scrollIntoView({ block: "center", behavior: reduceMotion ? "auto" : "smooth" });
+      return;
+    }
+  }
+
   function ensureShadow() {
     if (shadow) return shadow;
 
@@ -2105,7 +2260,7 @@ export function createArtifactSdk(
 
     shadow = host.attachShadow({ mode: "open" });
     const style = document.createElement("style");
-    style.textContent = `:host{all:initial;position:fixed;z-index:2147483647;left:0;top:0;color-scheme:dark;--ink-900:#0f1115;--ink-800:#11141a;--ink-700:#171a21;--ink-600:#1c212b;--steel-700:#2a2f3a;--steel-600:#303745;--steel-500:#3c4557;--steel-400:#8c96aa;--steel-300:#aeb6c6;--steel-200:#b9c0cf;--steel-100:#d8deea;--cream-50:#fffbf3;--cream-100:#f7f3ea;--cream-200:#e8e1cf;--brass-500:#f4c95d;--brass-400:#ffd877;--brass-ink:#17130a;--rust-500:#f06464;--bg:var(--ink-900);--bg-panel:var(--ink-800);--bg-elevated:var(--ink-600);--fg:var(--cream-100);--fg-faint:var(--steel-300);--fg-label:var(--steel-400);--border:var(--steel-600);--border-strong:var(--steel-500);--accent:#f4c95d;--accent-hover:#ffd877;--danger:var(--rust-500);--danger-line:rgba(240,100,100,.55);--surface-hover:rgba(247,243,234,.06);--edge-highlight:inset 0 1px 0 rgba(247,243,234,.06);--font-sans:Geist,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;--font-mono:"Geist Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;--radius-sm:8px;--radius-md:10px;--radius-xl:14px;--shadow-floating:0 20px 70px rgba(0,0,0,.35);--ease:cubic-bezier(.2,.6,.2,1);--dur-fast:120ms;--dur:180ms;font-family:var(--font-sans)}*{box-sizing:border-box}:focus-visible{outline:2px solid var(--accent);outline-offset:2px}@keyframes lavish-card-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}@media (prefers-reduced-motion:reduce){.lavish-annotation-card{animation-duration:1ms}}.lavish-text-highlight{position:fixed;pointer-events:none;background:rgba(244,201,93,.28);border-radius:2px;box-shadow:0 0 0 1px rgba(244,201,93,.45)}.lavish-annotation-card{position:fixed;width:min(320px,calc(100vw - 24px));padding:12px;border-radius:var(--radius-xl);background:var(--bg-panel);color:var(--fg);border:1px solid var(--accent);box-shadow:var(--shadow-floating),var(--edge-highlight);font:14px/1.45 var(--font-sans);animation:lavish-card-in var(--dur) var(--ease) both}.lavish-heading{font-size:15px;font-weight:600;letter-spacing:-.01em;line-height:1.3;margin-bottom:8px}.lavish-annotation-card textarea{width:100%;min-height:86px;resize:vertical;border-radius:var(--radius-md);border:1px solid var(--border);background:var(--bg);color:var(--fg);padding:10px;font:inherit;font-family:var(--font-sans);line-height:1.45;transition:border-color var(--dur-fast) var(--ease)}.lavish-annotation-card textarea:hover:not(:focus-visible){border-color:var(--border-strong)}.lavish-annotation-card textarea::placeholder{color:var(--fg-label)}.lavish-annotation-card .lavish-hint{margin-top:8px;font-size:11px;line-height:1.45;color:var(--fg-faint)}.lavish-annotation-card .lavish-hint-alert{color:var(--danger);font-weight:700}.lavish-annotation-card .lavish-row{display:flex;gap:8px;justify-content:flex-end;margin-top:12px}.lavish-annotation-card button{border:0;border-radius:var(--radius-md);padding:8px 12px;font-family:var(--font-sans);font-size:13px;font-weight:700;cursor:pointer;transition:background var(--dur-fast) var(--ease),color var(--dur-fast) var(--ease),opacity var(--dur-fast) var(--ease)}.lavish-annotation-card button:active{opacity:.85}.lavish-annotation-card .lavish-send{background:var(--accent);color:var(--brass-ink)}.lavish-annotation-card .lavish-send:hover{background:var(--accent-hover)}.lavish-annotation-card .lavish-cancel{background:transparent;color:var(--fg-faint);box-shadow:inset 0 0 0 1px var(--border)}.lavish-annotation-card .lavish-cancel:hover{background:var(--surface-hover);color:var(--fg)}.lavish-annotation-card.is-dropping{outline:2px dashed var(--accent);outline-offset:3px}.lavish-attachments{display:flex;flex-direction:column;gap:6px;margin-top:8px;max-height:176px;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:var(--steel-600) transparent}.lavish-attachment-chip{display:flex;align-items:center;gap:8px;padding:6px;border-radius:var(--radius-md);background:var(--bg);border:1px solid var(--border);transition:border-color var(--dur-fast) var(--ease)}.lavish-attachment-chip.is-error{border-color:var(--danger-line)}.lavish-attachment-thumb{width:32px;height:32px;border-radius:var(--radius-sm);object-fit:cover;background:var(--ink-700);flex:0 0 auto}.lavish-attachment-thumb-empty{display:inline-block}.lavish-attachment-body{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1 1 auto}.lavish-attachment-name{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.lavish-attachment-status{font-size:11px;color:var(--fg-faint)}.lavish-attachment-status-error{color:var(--danger)}.lavish-attachment-retry{flex:0 0 auto;padding:4px 8px;font-size:11px;font-weight:700;border-radius:var(--radius-sm);background:transparent;color:var(--fg);box-shadow:inset 0 0 0 1px var(--border);cursor:pointer;border:0}.lavish-attachment-retry:hover{background:var(--surface-hover)}.lavish-attachment-remove{flex:0 0 auto;display:flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0!important;border-radius:50%;background:transparent;color:var(--fg-faint);cursor:pointer;border:0}.lavish-attachment-remove:hover{background:var(--surface-hover);color:var(--fg)}.lavish-attach-row{margin-top:8px}.lavish-attach{display:inline-flex;align-items:center;gap:6px;padding:6px 10px!important;background:transparent!important;color:var(--fg-faint)!important;box-shadow:inset 0 0 0 1px var(--border);font-size:12px!important}.lavish-attach:hover{background:var(--surface-hover)!important;color:var(--fg)!important}.lavish-reveal-marker{position:fixed;pointer-events:none;border:2px solid var(--accent);border-radius:6px;box-shadow:0 0 0 4px rgba(244,201,93,.22);animation:lavish-reveal-pulse 2.4s var(--ease,ease-out) forwards}@keyframes lavish-reveal-pulse{0%{opacity:0}12%{opacity:1}70%{opacity:1}100%{opacity:0}}`;
+    style.textContent = `:host{all:initial;position:fixed;z-index:2147483647;left:0;top:0;color-scheme:dark;--ink-900:#191d25;--ink-800:#1e232c;--ink-700:#252b36;--ink-600:#2e3542;--steel-700:#363d4b;--steel-600:#414a5c;--steel-500:#515c72;--steel-400:#8c96aa;--steel-300:#aeb6c6;--steel-200:#b9c0cf;--steel-100:#d8deea;--cream-50:#fffbf3;--cream-100:#f7f3ea;--cream-200:#e8e1cf;--brass-500:#f4c95d;--brass-400:#ffd877;--brass-ink:#17130a;--rust-500:#f06464;--bg:var(--ink-900);--bg-panel:var(--ink-800);--bg-elevated:var(--ink-600);--fg:var(--cream-100);--fg-faint:var(--steel-300);--fg-label:var(--steel-400);--border:var(--steel-600);--border-strong:var(--steel-500);--accent:#f4c95d;--accent-hover:#ffd877;--danger:var(--rust-500);--danger-line:rgba(240,100,100,.55);--surface-hover:rgba(247,243,234,.06);--edge-highlight:inset 0 1px 0 rgba(247,243,234,.06);--font-sans:Geist,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;--font-mono:"Geist Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;--radius-sm:8px;--radius-md:10px;--radius-xl:14px;--shadow-floating:0 20px 70px rgba(0,0,0,.35);--ease:cubic-bezier(.2,.6,.2,1);--dur-fast:120ms;--dur:180ms;font-family:var(--font-sans)}*{box-sizing:border-box}:focus-visible{outline:2px solid var(--accent);outline-offset:2px}@keyframes lavish-card-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}@media (prefers-reduced-motion:reduce){.lavish-annotation-card{animation-duration:1ms}}.lavish-text-highlight{position:fixed;pointer-events:none;background:rgba(244,201,93,.28);border-radius:2px;box-shadow:0 0 0 1px rgba(244,201,93,.45)}.lavish-annotation-card{position:fixed;width:min(320px,calc(100vw - 24px));padding:12px;border-radius:var(--radius-xl);background:var(--bg-panel);color:var(--fg);border:1px solid var(--accent);box-shadow:var(--shadow-floating),var(--edge-highlight);font:14px/1.45 var(--font-sans);animation:lavish-card-in var(--dur) var(--ease) both}.lavish-heading{font-size:15px;font-weight:600;letter-spacing:-.01em;line-height:1.3;margin-bottom:8px}.lavish-annotation-card textarea{width:100%;min-height:86px;resize:vertical;border-radius:var(--radius-md);border:1px solid var(--border);background:var(--bg);color:var(--fg);padding:10px;font:inherit;font-family:var(--font-sans);line-height:1.45;transition:border-color var(--dur-fast) var(--ease)}.lavish-annotation-card textarea:hover:not(:focus-visible){border-color:var(--border-strong)}.lavish-annotation-card textarea::placeholder{color:var(--fg-label)}.lavish-annotation-card .lavish-hint{margin-top:8px;font-size:11px;line-height:1.45;color:var(--fg-faint)}.lavish-annotation-card .lavish-hint-alert{color:var(--danger);font-weight:700}.lavish-annotation-card .lavish-row{display:flex;gap:8px;justify-content:flex-end;margin-top:12px}.lavish-annotation-card button{border:0;border-radius:var(--radius-md);padding:8px 12px;font-family:var(--font-sans);font-size:13px;font-weight:700;cursor:pointer;transition:background var(--dur-fast) var(--ease),color var(--dur-fast) var(--ease),opacity var(--dur-fast) var(--ease)}.lavish-annotation-card button:active{opacity:.85}.lavish-annotation-card .lavish-send{background:var(--accent);color:var(--brass-ink)}.lavish-annotation-card .lavish-send:hover{background:var(--accent-hover)}.lavish-annotation-card .lavish-cancel{background:transparent;color:var(--fg-faint);box-shadow:inset 0 0 0 1px var(--border)}.lavish-annotation-card .lavish-cancel:hover{background:var(--surface-hover);color:var(--fg)}.lavish-annotation-card.is-dropping{outline:2px dashed var(--accent);outline-offset:3px}.lavish-attachments{display:flex;flex-direction:column;gap:6px;margin-top:8px;max-height:176px;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:var(--steel-600) transparent}.lavish-attachment-chip{display:flex;align-items:center;gap:8px;padding:6px;border-radius:var(--radius-md);background:var(--bg);border:1px solid var(--border);transition:border-color var(--dur-fast) var(--ease)}.lavish-attachment-chip.is-error{border-color:var(--danger-line)}.lavish-attachment-thumb{width:32px;height:32px;border-radius:var(--radius-sm);object-fit:cover;background:var(--ink-700);flex:0 0 auto}.lavish-attachment-thumb-empty{display:inline-block}.lavish-attachment-body{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1 1 auto}.lavish-attachment-name{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.lavish-attachment-status{font-size:11px;color:var(--fg-faint)}.lavish-attachment-status-error{color:var(--danger)}.lavish-attachment-retry{flex:0 0 auto;padding:4px 8px;font-size:11px;font-weight:700;border-radius:var(--radius-sm);background:transparent;color:var(--fg);box-shadow:inset 0 0 0 1px var(--border);cursor:pointer;border:0}.lavish-attachment-retry:hover{background:var(--surface-hover)}.lavish-attachment-remove{flex:0 0 auto;display:flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0!important;border-radius:50%;background:transparent;color:var(--fg-faint);cursor:pointer;border:0}.lavish-attachment-remove:hover{background:var(--surface-hover);color:var(--fg)}.lavish-attach-row{margin-top:8px}.lavish-attach{display:inline-flex;align-items:center;gap:6px;padding:6px 10px!important;background:transparent!important;color:var(--fg-faint)!important;box-shadow:inset 0 0 0 1px var(--border);font-size:12px!important}.lavish-attach:hover{background:var(--surface-hover)!important;color:var(--fg)!important}.lavish-reveal-marker{position:fixed;pointer-events:none;border:2px solid var(--accent);border-radius:6px;box-shadow:0 0 0 4px rgba(244,201,93,.22);animation:lavish-reveal-pulse 2.4s var(--ease,ease-out) forwards}@keyframes lavish-reveal-pulse{0%{opacity:0}12%{opacity:1}70%{opacity:1}100%{opacity:0}}`;
     shadow.appendChild(style);
     return shadow;
   }
@@ -2342,6 +2497,8 @@ export function createArtifactSdk(
     }
     if (msg.type === "lavish:restoreReviewState") restoreReviewState(msg.state);
     if (msg.type === "lavish:revealElement") revealElement(msg.selector);
+    if (msg.type === "lavish:scrollToSection") scrollToOutlineSection(msg.selector);
+    if (msg.type === "lavish:scrollToQuestion") scrollToOutlineQuestion(msg.question);
   });
 
   // Bring a warning's element into view and flash it. The marker is Lavish UI, so it is excluded
@@ -2387,6 +2544,10 @@ export function createArtifactSdk(
       scrollFrame = window.requestAnimationFrame(() => {
         scrollFrame = 0;
         postArtifactMessage("lavish:scroll", { x: window.scrollX, y: window.scrollY });
+        // Reuse the existing rAF-coalesced scroll tick for the section readout: the
+        // observer alone only speaks when a heading crosses the reading line, which
+        // never happens for headings past the end of a long document.
+        recomputePassedOutlineSections();
       });
     },
     { passive: true },
@@ -2466,8 +2627,10 @@ export function createArtifactSdk(
   setAnnotationMode(annotationMode);
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", startLayoutAudit, { once: true });
+    document.addEventListener("DOMContentLoaded", startOutline, { once: true });
   } else {
     startLayoutAudit();
+    startOutline();
   }
 
   // Mermaid renders asynchronously (and can re-render on theme/resize), so we

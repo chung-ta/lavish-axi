@@ -390,6 +390,11 @@ async function createChromeHarness({
     queued() {
       return JSON.parse(storage.get("lavish-axi:queued:abc") || "[]");
     },
+    // Queued-prompt pills are rendered as an HTML string, so tests drive the close
+    // button's handler directly instead of synthesizing a click on it.
+    removeQueuedPrompt(index) {
+      return context.removeQueuedPrompt(index);
+    },
     reloadCount() {
       return reloadCount;
     },
@@ -2736,4 +2741,330 @@ test("a settled upload frees an in-flight slot for the next (D8)", async () => {
   await flushPromises();
 
   assert.equal(resolvers.length, startedBefore + 1, "a freed slot admits the next upload");
+});
+
+// --- Section bar ------------------------------------------------------------
+// The bar is chrome, but everything it shows comes from the artifact, so these
+// exercise the boundary: what the SDK reports, what the chrome renders, and - most
+// importantly - what the decision counter is allowed to claim.
+
+function outlineMessage(chrome, overrides = {}) {
+  return {
+    type: "lavish:outline",
+    artifact_load_token: chrome.artifactLoadToken(),
+    entries: [
+      { level: 1, depth: 0, text: "Four findings", selector: "h1" },
+      { level: 2, depth: 1, text: "Rollout", selector: "h2" },
+      { level: 2, depth: 1, text: "Risks", selector: "h2:nth-of-type(2)" },
+    ],
+    questions: [],
+    scroll_ratio: 8,
+    ...overrides,
+  };
+}
+
+test("the section bar stays hidden until the artifact reports a navigable outline", async () => {
+  const chrome = await createChromeHarness();
+
+  // A single heading on a short page is a title, not a structure to navigate.
+  assert.equal(chrome.element("tocBar").hidden, true);
+
+  chrome.sendFrameMessage(
+    outlineMessage(chrome, { entries: [{ level: 1, depth: 0, text: "Only", selector: "h1" }], scroll_ratio: 1 }),
+  );
+  assert.equal(chrome.element("tocBar").hidden, true);
+
+  chrome.sendFrameMessage(outlineMessage(chrome));
+  assert.equal(chrome.element("tocBar").hidden, false);
+  assert.equal(chrome.element("tocCurrentText").textContent, "Four findings");
+});
+
+test("the section bar ignores an outline from a stale artifact load", async () => {
+  const chrome = await createChromeHarness();
+
+  chrome.sendFrameMessage(outlineMessage(chrome, { artifact_load_token: "stale-token" }));
+
+  assert.equal(chrome.element("tocBar").hidden, true);
+});
+
+test("choosing a section asks the artifact iframe to scroll there", async () => {
+  const chrome = await createChromeHarness();
+  chrome.sendFrameMessage(outlineMessage(chrome));
+
+  chrome.element("tocCurrent").click();
+  const items = chrome.element("tocMenu").children;
+  assert.equal(items.length, 3);
+  items[2].click();
+
+  const message = chrome.postedToFrame.at(-1);
+  assert.equal(message.type, "lavish:scrollToSection");
+  assert.equal(message.selector, "h2:nth-of-type(2)");
+  assert.equal(chrome.element("tocMenu").hidden, true);
+});
+
+test("the current section follows the artifact's scroll position", async () => {
+  const chrome = await createChromeHarness();
+  chrome.sendFrameMessage(outlineMessage(chrome));
+
+  chrome.sendFrameMessage({
+    type: "lavish:outlineActive",
+    artifact_load_token: chrome.artifactLoadToken(),
+    index: 2,
+  });
+
+  assert.equal(chrome.element("tocCurrentText").textContent, "Risks");
+});
+
+test("no decision counter renders when the artifact declares no questions", async () => {
+  const chrome = await createChromeHarness();
+  chrome.sendFrameMessage(outlineMessage(chrome));
+
+  // Nothing honest to report beats a meaningless 0/0.
+  assert.equal(chrome.element("tocDecisions").hidden, true);
+});
+
+// The honesty invariant, end to end: the counter reflects submitted answers only.
+// Selection state inside the artifact - including a radio the authoring agent
+// pre-checked as its recommendation - must never advance it.
+test("the decision counter counts submitted answers, not selections", async () => {
+  const chrome = await createChromeHarness();
+  chrome.sendFrameMessage(
+    outlineMessage(chrome, { questions: [{ key: "plan" }, { key: "rollout" }, { key: "owner" }] }),
+  );
+
+  assert.equal(chrome.element("tocDecisions").hidden, false);
+  assert.equal(chrome.element("tocCount").textContent, "0/3");
+
+  // A selection reported through review state is not an answer.
+  chrome.sendFrameMessage({
+    type: "lavish:reviewState",
+    artifact_load_token: chrome.artifactLoadToken(),
+    state: { fields: [{ question: "plan", type: "radio", checked: true, value: "Pro" }] },
+  });
+  assert.equal(chrome.element("tocCount").textContent, "0/3");
+
+  // Submitting the question's answer is what counts.
+  chrome.sendFrameMessage({
+    type: "lavish:queuePrompt",
+    artifact_load_token: chrome.artifactLoadToken(),
+    prompt: {
+      uid: "u1",
+      prompt: "Use the Pro plan",
+      selector: "form",
+      tag: "choice",
+      _lavishQueueKey: "question:plan",
+    },
+  });
+  assert.equal(chrome.element("tocCount").textContent, "1/3");
+});
+
+test("an annotation raised inside a question is not counted as an answer", async () => {
+  const chrome = await createChromeHarness();
+  chrome.sendFrameMessage(outlineMessage(chrome, { questions: [{ key: "plan" }] }));
+
+  // The annotation card queues with an empty queue key on purpose.
+  chrome.sendFrameMessage({
+    type: "lavish:queuePrompt",
+    artifact_load_token: chrome.artifactLoadToken(),
+    prompt: { uid: "u1", prompt: "This wording is unclear", selector: "form p", tag: "element" },
+  });
+
+  assert.equal(chrome.element("tocCount").textContent, "0/1");
+});
+
+test("an answered decision stays counted after the batch is sent to the agent", async () => {
+  const chrome = await createChromeHarness();
+  chrome.sendFrameMessage(outlineMessage(chrome, { questions: [{ key: "plan" }] }));
+  chrome.sendFrameMessage({
+    type: "lavish:queuePrompt",
+    artifact_load_token: chrome.artifactLoadToken(),
+    prompt: {
+      uid: "u1",
+      prompt: "Use the Pro plan",
+      selector: "form",
+      tag: "choice",
+      _lavishQueueKey: "question:plan",
+    },
+  });
+  assert.equal(chrome.element("tocCount").textContent, "1/1");
+
+  chrome.element("send").onclick();
+  chrome.sendFrameMessage({
+    type: "lavish:snapshot",
+    artifact_load_token: chrome.artifactLoadToken(),
+    snapshot: "uid=1 body",
+  });
+  await flushPromises();
+
+  // Delivery splices the prompt out of the queue; the answer must not un-answer.
+  assert.equal(chrome.queued().length, 0);
+  assert.equal(chrome.element("tocCount").textContent, "1/1");
+});
+
+test("the open-decision action jumps to the first unanswered question", async () => {
+  const chrome = await createChromeHarness();
+  chrome.sendFrameMessage(outlineMessage(chrome, { questions: [{ key: "plan" }, { key: "rollout" }] }));
+  chrome.sendFrameMessage({
+    type: "lavish:queuePrompt",
+    artifact_load_token: chrome.artifactLoadToken(),
+    prompt: {
+      uid: "u1",
+      prompt: "Use the Pro plan",
+      selector: "form",
+      tag: "choice",
+      _lavishQueueKey: "question:plan",
+    },
+  });
+
+  chrome.element("tocDecisions").click();
+
+  const message = chrome.postedToFrame.at(-1);
+  assert.equal(message.type, "lavish:scrollToQuestion");
+  assert.equal(message.question, "rollout");
+});
+
+test("answered decisions do not leak across review sessions", async () => {
+  const storage = new Map();
+  const first = await createChromeHarness({ storage });
+  first.sendFrameMessage(outlineMessage(first, { questions: [{ key: "plan" }] }));
+  first.sendFrameMessage({
+    type: "lavish:queuePrompt",
+    artifact_load_token: first.artifactLoadToken(),
+    prompt: {
+      uid: "u1",
+      prompt: "Use the Pro plan",
+      selector: "form",
+      tag: "choice",
+      _lavishQueueKey: "question:plan",
+    },
+  });
+  assert.equal(first.element("tocCount").textContent, "1/1");
+
+  const other = await createChromeHarness({
+    storage,
+    sessionData: { ...defaultSessionData, key: "different" },
+  });
+  other.sendFrameMessage(outlineMessage(other, { questions: [{ key: "plan" }] }));
+
+  assert.equal(other.element("tocCount").textContent, "0/1");
+});
+
+test("the section list closes on Escape and returns focus to its trigger", async () => {
+  const chrome = await createChromeHarness();
+  chrome.sendFrameMessage(outlineMessage(chrome));
+  chrome.element("tocCurrent").click();
+  assert.equal(chrome.element("tocMenu").hidden, false);
+
+  chrome.dispatchDocumentKeydown({ key: "Escape" });
+
+  assert.equal(chrome.element("tocMenu").hidden, true);
+  assert.equal(chrome.focusLog.at(-1), "tocCurrent");
+});
+
+// Delivery is not the only way a prompt leaves the queue. If removal did not retract,
+// the counter would keep reporting an answer the agent will never receive - the exact
+// over-reporting the section bar exists to avoid.
+test("removing a queued answer retracts it from the decision counter", async () => {
+  const chrome = await createChromeHarness();
+  chrome.sendFrameMessage(outlineMessage(chrome, { questions: [{ key: "plan" }, { key: "rollout" }] }));
+  chrome.sendFrameMessage({
+    type: "lavish:queuePrompt",
+    artifact_load_token: chrome.artifactLoadToken(),
+    prompt: {
+      uid: "u1",
+      prompt: "Use the Pro plan",
+      selector: "form",
+      tag: "choice",
+      _lavishQueueKey: "question:plan",
+    },
+  });
+  assert.equal(chrome.element("tocCount").textContent, "1/2");
+
+  // The pill markup is set as an HTML string, so drive the same handler the close
+  // button is wired to rather than synthesizing a DOM click.
+  assert.match(chrome.element("annotationPills").innerHTML, /pill-close/);
+  chrome.removeQueuedPrompt(0);
+
+  assert.equal(chrome.queued().length, 0);
+  assert.equal(chrome.element("tocCount").textContent, "0/2");
+});
+
+// The session key is the artifact's path, so it survives the file being regenerated
+// with entirely different decisions.
+test("answers for questions a new revision no longer declares are dropped", async () => {
+  const chrome = await createChromeHarness();
+  chrome.sendFrameMessage(outlineMessage(chrome, { questions: [{ key: "plan" }] }));
+  chrome.sendFrameMessage({
+    type: "lavish:queuePrompt",
+    artifact_load_token: chrome.artifactLoadToken(),
+    prompt: {
+      uid: "u1",
+      prompt: "Use the Pro plan",
+      selector: "form",
+      tag: "choice",
+      _lavishQueueKey: "question:plan",
+    },
+  });
+  assert.equal(chrome.element("tocCount").textContent, "1/1");
+
+  // The artifact is rewritten and now asks something else entirely.
+  chrome.sendFrameMessage(outlineMessage(chrome, { questions: [{ key: "deploy" }] }));
+
+  assert.equal(chrome.element("tocCount").textContent, "0/1");
+});
+
+test("an answer does not survive a revision that declares no questions at all", async () => {
+  const chrome = await createChromeHarness();
+  chrome.sendFrameMessage(outlineMessage(chrome, { questions: [{ key: "plan" }] }));
+  chrome.sendFrameMessage({
+    type: "lavish:queuePrompt",
+    artifact_load_token: chrome.artifactLoadToken(),
+    prompt: {
+      uid: "u1",
+      prompt: "Use the Pro plan",
+      selector: "form",
+      tag: "choice",
+      _lavishQueueKey: "question:plan",
+    },
+  });
+  assert.equal(chrome.element("tocCount").textContent, "1/1");
+
+  // The decisions are removed entirely, then the author reverts and restores them.
+  // An empty scan is the document declaring none, not an absence of information -
+  // so the stale answer must not come back when the key is re-declared.
+  chrome.sendFrameMessage(outlineMessage(chrome, { questions: [] }));
+  chrome.sendFrameMessage(outlineMessage(chrome, { questions: [{ key: "plan" }] }));
+
+  assert.equal(chrome.element("tocCount").textContent, "0/1");
+});
+
+test("a hostile heading renders as inert text, never as markup", async () => {
+  const chrome = await createChromeHarness();
+  const hostile = '<img src=x onerror="alert(1)">';
+  chrome.sendFrameMessage(
+    outlineMessage(chrome, {
+      entries: [
+        { level: 1, depth: 0, text: hostile, selector: "h1" },
+        { level: 2, depth: 1, text: "Second", selector: "h2" },
+      ],
+    }),
+  );
+
+  // The chrome origin can POST prompts to the agent, so markup escaping here is a
+  // sandbox boundary, not a cosmetic concern. textContent is the whole defense.
+  assert.equal(chrome.element("tocCurrentText").textContent, hostile);
+});
+
+test("the section bar goes inert when the session ends", async () => {
+  const chrome = await createChromeHarness();
+  chrome.sendFrameMessage(outlineMessage(chrome, { questions: [{ key: "plan" }] }));
+  assert.equal(chrome.element("tocCurrent").disabled, false);
+
+  chrome.element("end").onclick();
+  await flushPromises();
+
+  // The ended overlay starts below the section row, so the controls must disable
+  // themselves rather than relying on being covered.
+  assert.equal(chrome.element("tocCurrent").disabled, true);
+  assert.equal(chrome.element("tocDecisions").disabled, true);
 });
